@@ -2,7 +2,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+      Exact alarms. USE_EXACT_ALARM is granted at install and is the one meant
+      for alarm- and reminder-class apps, which this is; SCHEDULE_EXACT_ALARM
+      covers 12 and 13, where it can be refused and the refusal is silent.
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- Android 13+ runtime grant. Denied means the alarm fires and nobody sees it. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- AlarmManager forgets everything on reboot, with no warning to anyone. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
+        android:name=".spike.SpikeApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -22,6 +37,25 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Not exported: only AlarmManager delivers to these, and an exported
+          receiver would let any app on the device forge a firing and corrupt
+          the results.
+        -->
+        <receiver
+            android:name=".spike.AlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".spike.BootReceiver"
+            android:exported="false"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
