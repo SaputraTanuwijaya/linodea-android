@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.saputratanuwijaya.linodea.spike.AlarmScheduler
 import io.github.saputratanuwijaya.linodea.spike.BatteryPolicy
+import io.github.saputratanuwijaya.linodea.spike.KeepAliveService
 import io.github.saputratanuwijaya.linodea.spike.CrashLog
 import io.github.saputratanuwijaya.linodea.spike.ProcessState
 import io.github.saputratanuwijaya.linodea.spike.SpikeLog
@@ -104,6 +105,7 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
     // for Settings and comes back, and a cached value would still claim the
     // app is restricted after they have just fixed it.
     var batteryExempt by remember { mutableStateOf(BatteryPolicy.isExempt(context)) }
+    var keepAlive by remember { mutableStateOf(KeepAliveService.isRunning(context)) }
 
     fun arm(api: AlarmScheduler.Api, minutes: Int) {
         val due = System.currentTimeMillis() + minutes * 60_000L
@@ -183,6 +185,32 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
                         "intent can reach. Check it under App settings.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (keepAlive) "Keep-alive: ON" else "Keep-alive: off",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "Holds the process out of XOS's freezer with a permanent " +
+                        "notification. Ugly, and the last lever available after " +
+                        "battery, autostart and sleep-standby all failed. Turn it " +
+                        "on, arm an alarm, lock the phone and leave it alone.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        if (keepAlive) KeepAliveService.stop(context)
+                        else KeepAliveService.start(context)
+                        keepAlive = !keepAlive
+                    }) { Text(if (keepAlive) "Turn off" else "Turn on") }
+                    OutlinedButton(onClick = { keepAlive = KeepAliveService.isRunning(context) }) {
+                        Text("Re-check")
+                    }
+                }
             }
         }
 

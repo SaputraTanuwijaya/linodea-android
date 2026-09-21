@@ -30,6 +30,16 @@
     -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!--
+      Holds the process out of the freezer. Needed because on XOS the three
+      available settings were not enough: alarms still queued behind a frozen
+      app until it was opened by hand. `specialUse` is the honest type: this
+      is not sync, media or location, it is "stay resident so an alarm can be
+      delivered".
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
         android:name=".spike.SpikeApplication"
         android:allowBackup="true"
@@ -57,6 +67,15 @@
           receiver would let any app on the device forge a firing and corrupt
           the results.
         -->
+        <service
+            android:name=".spike.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the process resident so exact alarms are delivered on OEM builds that freeze cached apps" />
+        </service>
+
         <receiver
             android:name=".spike.AlarmReceiver"
             android:exported="false" />
