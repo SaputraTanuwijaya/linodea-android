@@ -25,8 +25,12 @@ object ProcessState {
 class SpikeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Deliberately not set here: process creation is exactly the case being
-        // detected. MainActivity sets it, so "warm" means "the user has had
-        // this app open since the process started".
+        // Installed here so it covers every entry point, including a receiver
+        // waking a cold process at 3am -- the crash least likely to be seen.
+        CrashLog.install(this)
+
+        // `wasWarm` is deliberately NOT set here: process creation is exactly
+        // the case being detected. MainActivity sets it, so "warm" means "the
+        // user has had this app open since the process started".
     }
 }

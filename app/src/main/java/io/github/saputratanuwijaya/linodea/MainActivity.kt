@@ -29,11 +29,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.saputratanuwijaya.linodea.spike.AlarmScheduler
+import io.github.saputratanuwijaya.linodea.spike.CrashLog
 import io.github.saputratanuwijaya.linodea.spike.ProcessState
 import io.github.saputratanuwijaya.linodea.spike.SpikeLog
 import io.github.saputratanuwijaya.linodea.ui.theme.LinodeaTheme
@@ -82,9 +85,18 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
     // Asked once on open rather than at fire time: a denial on Android 13+ is
     // silent, and a spike that cannot show a notification looks exactly like an
     // alarm that never fired.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        remember { askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS); true }
+    //
+    // In a LaunchedEffect, NOT during composition. `rememberLauncherForActivity-
+    // Result` does not register its launcher until composition completes, so
+    // calling launch() while composing throws "Launcher has not been
+    // initialized" -- which crashed every open of the first build.
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
+
+    var crash by remember { mutableStateOf(CrashLog.last(context)) }
 
     val exactAllowed = AlarmScheduler.canScheduleExact(context)
 
@@ -103,6 +115,24 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Alarm spike", style = MaterialTheme.typography.headlineSmall)
+
+        // There is no logcat on a sideloaded build with USB debugging off, so
+        // the last crash is shown here or it is not shown at all.
+        crash?.let { trace ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Last crash", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        trace.take(1500),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    OutlinedButton(onClick = { CrashLog.clear(context); crash = null }) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+        }
         Text(
             "Unplug the phone before any test longer than five minutes. " +
                 "Doze does not engage while charging, so a plugged-in run passes " +
