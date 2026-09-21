@@ -23,6 +23,13 @@
     -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <!--
+      Lets the app ask, in one tap, to stop being battery-optimised. Observed
+      necessary on XOS, where the app is frozen with the screen off and alarms
+      arrive only when it thaws.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".spike.SpikeApplication"
         android:allowBackup="true"

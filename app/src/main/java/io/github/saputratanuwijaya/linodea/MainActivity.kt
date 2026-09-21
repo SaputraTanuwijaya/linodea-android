@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.saputratanuwijaya.linodea.spike.AlarmScheduler
+import io.github.saputratanuwijaya.linodea.spike.BatteryPolicy
 import io.github.saputratanuwijaya.linodea.spike.CrashLog
 import io.github.saputratanuwijaya.linodea.spike.ProcessState
 import io.github.saputratanuwijaya.linodea.spike.SpikeLog
@@ -99,6 +100,10 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
     var crash by remember { mutableStateOf(CrashLog.last(context)) }
 
     val exactAllowed = AlarmScheduler.canScheduleExact(context)
+    // Re-read on every recomposition rather than remembered: the user leaves
+    // for Settings and comes back, and a cached value would still claim the
+    // app is restricted after they have just fixed it.
+    var batteryExempt by remember { mutableStateOf(BatteryPolicy.isExempt(context)) }
 
     fun arm(api: AlarmScheduler.Api, minutes: Int) {
         val due = System.currentTimeMillis() + minutes * 60_000L
@@ -134,11 +139,52 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
             }
         }
         Text(
-            "Unplug the phone before any test longer than five minutes. " +
+            "Arm an alarm, lock the screen, and DO NOT TOUCH THE PHONE until " +
+                "after the due time — waking it is what made the last two runs " +
+                "look late. Unplug for anything longer than five minutes. " +
                 "Doze does not engage while charging, so a plugged-in run passes " +
                 "regardless and proves nothing.",
             style = MaterialTheme.typography.bodySmall,
         )
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (batteryExempt) "Battery: unrestricted" else "Battery: OPTIMISED",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (batteryExempt) {
+                        "The OS has agreed not to freeze this app. Results below " +
+                            "are a fair test."
+                    } else {
+                        "Android may freeze this app with the screen off, which " +
+                            "holds alarms until you wake the phone. That is what " +
+                            "the 106s and 16s runs were measuring. Fix this before " +
+                            "trusting any result."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (!batteryExempt) {
+                    Button(onClick = { BatteryPolicy.requestExemption(context) }) {
+                        Text("Allow unrestricted battery")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { batteryExempt = BatteryPolicy.isExempt(context) }) {
+                        Text("Re-check")
+                    }
+                    OutlinedButton(onClick = { BatteryPolicy.openAppSettings(context) }) {
+                        Text("App settings")
+                    }
+                }
+                Text(
+                    "XOS also has its own autostart / protected-app list that no " +
+                        "intent can reach. Check it under App settings.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
 
         if (!exactAllowed) {
             Card(Modifier.fillMaxWidth()) {
