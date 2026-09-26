@@ -41,6 +41,10 @@ class AlarmReceiver : BroadcastReceiver() {
         val entry = SpikeLog.fired(context, id, coldStart, state)
 
         notify(context, id, api, entry, coldStart)
+
+        // Last, after the record and the notification are both out of this
+        // process: the sound is played by the system, so it outlives us.
+        EndWhenHidden.endAfterBroadcast(this, context)
     }
 
     private fun notify(

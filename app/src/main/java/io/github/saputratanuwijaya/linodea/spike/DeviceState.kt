@@ -31,6 +31,7 @@ object DeviceState {
             plugged = runCatching { isPlugged(app) }.getOrNull(),
             keepAlive = runCatching { KeepAliveService.isRunning(app) }.getOrNull(),
             batteryExempt = runCatching { BatteryPolicy.isExempt(app) }.getOrNull(),
+            endWhenHidden = runCatching { EndWhenHidden.isEnabled(app) }.getOrNull(),
         )
     }
 

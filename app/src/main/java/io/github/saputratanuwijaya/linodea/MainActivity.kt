@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import io.github.saputratanuwijaya.linodea.spike.AlarmScheduler
 import io.github.saputratanuwijaya.linodea.spike.BatteryPolicy
 import io.github.saputratanuwijaya.linodea.spike.DeviceState
+import io.github.saputratanuwijaya.linodea.spike.EndWhenHidden
 import io.github.saputratanuwijaya.linodea.spike.ExitHistory
 import io.github.saputratanuwijaya.linodea.spike.KeepAliveService
 import io.github.saputratanuwijaya.linodea.spike.CrashLog
@@ -85,6 +86,20 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         resumes += 1
     }
+
+    override fun onStart() {
+        super.onStart()
+        EndWhenHidden.visibleScreens += 1
+    }
+
+    override fun onStop() {
+        super.onStop()
+        EndWhenHidden.visibleScreens -= 1
+        // A rotation stops and restarts the screen; ending the process in the
+        // gap would look like a crash. Anything else -- Home, Recents, the
+        // screen turning off -- is the app leaving, and it ends here.
+        if (!isChangingConfigurations) EndWhenHidden.endIfHidden(this)
+    }
 }
 
 /**
@@ -92,7 +107,7 @@ class MainActivity : ComponentActivity() {
  * not the one before it -- a sideload that silently failed would otherwise
  * produce results from the old instrument.
  */
-private const val SPIKE_BUILD = "Instrument v2 - records the screen at delivery"
+private const val SPIKE_BUILD = "Instrument v3 - end when hidden"
 
 private val CLOCK = SimpleDateFormat("EEE HH:mm:ss", Locale.getDefault())
 
@@ -125,6 +140,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
     val exactAllowed = AlarmScheduler.canScheduleExact(context)
     var batteryExempt by remember { mutableStateOf(BatteryPolicy.isExempt(context)) }
     var keepAlive by remember { mutableStateOf(KeepAliveService.isRunning(context)) }
+    var endWhenHidden by remember { mutableStateOf(EndWhenHidden.isEnabled(context)) }
     var exits by remember { mutableStateOf(ExitHistory.recent(context)) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
@@ -132,6 +148,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
         entries = SpikeLog.all(context)
         batteryExempt = BatteryPolicy.isExempt(context)
         keepAlive = KeepAliveService.isRunning(context)
+        endWhenHidden = EndWhenHidden.isEnabled(context)
         exits = ExitHistory.recent(context)
         crash = CrashLog.last(context)
         now = System.currentTimeMillis()
@@ -238,20 +255,49 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
+                    if (endWhenHidden) "End when hidden: ON" else "End when hidden: off",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "The app ends itself whenever it leaves the screen, and a " +
+                        "second after each alarm, so there is nothing for XOS to " +
+                        "freeze and Android has to start it fresh at the due time. " +
+                        "It does by itself what swiping from Recents did by hand. " +
+                        "With this on, every alarm should say \"cold start\", and " +
+                        "leaving the app closes it -- that is expected.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(onClick = {
+                    EndWhenHidden.setEnabled(context, !endWhenHidden)
+                    endWhenHidden = !endWhenHidden
+                    keepAlive = KeepAliveService.isRunning(context)
+                }) { Text(if (endWhenHidden) "Turn off" else "Turn on") }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
                     if (keepAlive) "Keep-alive: ON" else "Keep-alive: off",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    "Holds the process out of XOS's freezer with a permanent " +
-                        "notification. Ugly, and the last lever available after " +
-                        "battery, autostart and sleep-standby all failed. Turn it " +
-                        "on, arm an alarm, lock the phone and leave it alone.",
+                    "Tested and FAILED on XOS: with the service running and the " +
+                        "process alive, the alarm was still held 3m 52s until the " +
+                        "screen came on. Kept for comparison only. Turning it on " +
+                        "turns End when hidden off -- a sticky service restarts " +
+                        "the process, which undoes every exit.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-                        if (keepAlive) KeepAliveService.stop(context)
-                        else KeepAliveService.start(context)
+                        if (keepAlive) {
+                            KeepAliveService.stop(context)
+                        } else {
+                            EndWhenHidden.setEnabled(context, false)
+                            endWhenHidden = false
+                            KeepAliveService.start(context)
+                        }
                         keepAlive = !keepAlive
                     }) { Text(if (keepAlive) "Turn off" else "Turn on") }
                     OutlinedButton(onClick = { keepAlive = KeepAliveService.isRunning(context) }) {
@@ -394,6 +440,7 @@ private fun yesNo(value: Boolean?, yes: String, no: String): String? = when (val
 }
 
 private fun describeArmed(s: SpikeLog.Snapshot): String = listOfNotNull(
+    yesNo(s.endWhenHidden, "end-when-hidden ON", "end-when-hidden off"),
     yesNo(s.keepAlive, "keep-alive ON", "keep-alive off"),
     yesNo(s.plugged, "PLUGGED IN", "unplugged"),
     yesNo(s.batteryExempt, "battery unrestricted", "battery OPTIMISED"),

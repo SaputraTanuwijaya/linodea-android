@@ -30,5 +30,9 @@ class BootReceiver : BroadcastReceiver() {
         SpikeLog.pending(context)
             .filter { it.dueAtMs > now }
             .forEach { AlarmScheduler.rearmSilently(context, it) }
+
+        // Boot starts the process; left running, it would be frozen before
+        // the first of the alarms it just re-armed.
+        EndWhenHidden.endAfterBroadcast(this, context)
     }
 }

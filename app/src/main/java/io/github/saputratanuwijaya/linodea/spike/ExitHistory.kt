@@ -11,9 +11,9 @@ import androidx.annotation.RequiresApi
  *
  * Separates the two ways an OEM can stop an alarm. A **freeze** leaves the
  * process alive and leaves no record here -- the alarm arrives late into a
- * warm process. A **kill** ends the process and is recorded, with a reason:
- * "force-stopped or swiped" also wipes every alarm the app had armed, so the
- * alarm never arrives at all. Without this, both look like "it didn't ring".
+ * warm process. A **kill** ends the process and is recorded, with a reason; a
+ * force-stop also wipes every alarm the app had armed, so the alarm never
+ * arrives at all. Without this, all of them look like "it didn't ring".
  *
  * Android 11+; older versions keep no such history.
  */
@@ -38,7 +38,7 @@ object ExitHistory {
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun reasonName(reason: Int): String = when (reason) {
-        ApplicationExitInfo.REASON_EXIT_SELF -> "exited itself"
+        ApplicationExitInfo.REASON_EXIT_SELF -> "ended itself"
         ApplicationExitInfo.REASON_SIGNALED -> "killed by signal"
         ApplicationExitInfo.REASON_LOW_MEMORY -> "low memory"
         ApplicationExitInfo.REASON_CRASH -> "crash"
@@ -47,7 +47,9 @@ object ExitHistory {
         ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "failed to start"
         ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission changed"
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive resource use"
-        ApplicationExitInfo.REASON_USER_REQUESTED -> "force-stopped or swiped (alarms wiped)"
+        // Both land here. Only a force-stop wipes the alarms; a swipe from
+        // Recents was observed on XOS to leave them armed (S95, run #1).
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "force-stopped or swiped from Recents"
         ApplicationExitInfo.REASON_USER_STOPPED -> "stopped by user"
         ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency died"
         ApplicationExitInfo.REASON_OTHER -> "killed by the system"

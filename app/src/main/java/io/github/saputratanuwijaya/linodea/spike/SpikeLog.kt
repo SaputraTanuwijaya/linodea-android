@@ -38,6 +38,7 @@ object SpikeLog {
         val plugged: Boolean?,
         val keepAlive: Boolean?,
         val batteryExempt: Boolean?,
+        val endWhenHidden: Boolean? = null,
     )
 
     /**
@@ -161,6 +162,7 @@ object SpikeLog {
         putOpt("plugged", plugged)
         putOpt("keepAlive", keepAlive)
         putOpt("batteryExempt", batteryExempt)
+        putOpt("endWhenHidden", endWhenHidden)
     }
 
     private fun snapshotOf(o: JSONObject?): Snapshot? = o?.let {
@@ -170,6 +172,7 @@ object SpikeLog {
             plugged = it.bool("plugged"),
             keepAlive = it.bool("keepAlive"),
             batteryExempt = it.bool("batteryExempt"),
+            endWhenHidden = it.bool("endWhenHidden"),
         )
     }
 
