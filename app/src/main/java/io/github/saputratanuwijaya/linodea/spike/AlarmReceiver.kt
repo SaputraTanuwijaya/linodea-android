@@ -27,19 +27,29 @@ class AlarmReceiver : BroadcastReceiver() {
         val id = intent.getIntExtra(EXTRA_ID, -1)
         if (id < 0) return
         val api = intent.getStringExtra(EXTRA_API) ?: "unknown"
-        val dueAt = intent.getLongExtra(EXTRA_DUE_AT, 0L)
+
+        // Read before anything else, and before the notification below can
+        // light the screen: this is the evidence of whether the phone was
+        // woken by a person (a held alarm) or by the alarm itself.
+        val state = DeviceState.snapshot(context)
 
         // `ProcessState.wasWarm` is set by the Application object only when the
         // process was already alive. A cold delivery means Android had to
         // rebuild us to get here, which is what an OEM kill looks like when it
         // does not simply swallow the alarm.
         val coldStart = !ProcessState.wasWarm
-        SpikeLog.fired(context, id, coldStart)
+        val entry = SpikeLog.fired(context, id, coldStart, state)
 
-        notify(context, id, api, dueAt, coldStart)
+        notify(context, id, api, entry, coldStart)
     }
 
-    private fun notify(context: Context, id: Int, api: String, dueAt: Long, coldStart: Boolean) {
+    private fun notify(
+        context: Context,
+        id: Int,
+        api: String,
+        entry: SpikeLog.Entry?,
+        coldStart: Boolean,
+    ) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -72,7 +82,8 @@ class AlarmReceiver : BroadcastReceiver() {
             }
         )
 
-        val driftSeconds = (System.currentTimeMillis() - dueAt) / 1000
+        val text = "$api - " + (entry?.headline(System.currentTimeMillis()) ?: "not in the log") +
+            if (coldStart) " - cold start" else ""
         val open = PendingIntent.getActivity(
             context,
             id,
@@ -83,12 +94,14 @@ class AlarmReceiver : BroadcastReceiver() {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Alarm #$id fired")
-            // The drift is on the notification itself, so a glance at the lock
-            // screen in the morning answers the question without opening
-            // anything: "it fired" and "it fired on time" are different results.
-            .setContentText(
-                "$api - ${driftSeconds}s late" + if (coldStart) " - cold start" else ""
-            )
+            // The verdict is on the notification itself, so a glance at the
+            // lock screen answers the question without opening anything: "it
+            // fired", "it fired on time" and "it was held until you looked"
+            // are three different results.
+            .setContentText(text)
+            // The headline is longer than one collapsed line; expanded, it
+            // reads whole instead of ending in an ellipsis before the verdict.
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)

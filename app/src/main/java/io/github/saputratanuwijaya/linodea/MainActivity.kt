@@ -27,6 +27,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
@@ -34,14 +36,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.saputratanuwijaya.linodea.spike.AlarmScheduler
 import io.github.saputratanuwijaya.linodea.spike.BatteryPolicy
+import io.github.saputratanuwijaya.linodea.spike.DeviceState
+import io.github.saputratanuwijaya.linodea.spike.ExitHistory
 import io.github.saputratanuwijaya.linodea.spike.KeepAliveService
 import io.github.saputratanuwijaya.linodea.spike.CrashLog
 import io.github.saputratanuwijaya.linodea.spike.ProcessState
 import io.github.saputratanuwijaya.linodea.spike.SpikeLog
 import io.github.saputratanuwijaya.linodea.ui.theme.LinodeaTheme
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,6 +61,10 @@ import java.util.Locale
  * battery manager? Everything here serves that and is meant to be thrown away.
  */
 class MainActivity : ComponentActivity() {
+    // Bumped on every resume so the screen re-reads what changed while it was
+    // away: an alarm delivered while locked, a setting changed in Settings.
+    private var resumes by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Marks the process as warm, so an alarm that arrives later can tell
@@ -65,17 +75,29 @@ class MainActivity : ComponentActivity() {
         setContent {
             LinodeaTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-                    SpikeScreen(Modifier.padding(padding))
+                    SpikeScreen(resumes, Modifier.padding(padding))
                 }
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        resumes += 1
+    }
 }
+
+/**
+ * Shown at the top so a glance confirms the phone is running this build and
+ * not the one before it -- a sideload that silently failed would otherwise
+ * produce results from the old instrument.
+ */
+private const val SPIKE_BUILD = "Instrument v2 - records the screen at delivery"
 
 private val CLOCK = SimpleDateFormat("EEE HH:mm:ss", Locale.getDefault())
 
 @Composable
-private fun SpikeScreen(modifier: Modifier = Modifier) {
+private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var entries by remember { mutableStateOf(SpikeLog.all(context)) }
     var nextId by remember { mutableStateOf((entries.maxOfOrNull { it.id } ?: 0) + 1) }
@@ -101,11 +123,33 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
     var crash by remember { mutableStateOf(CrashLog.last(context)) }
 
     val exactAllowed = AlarmScheduler.canScheduleExact(context)
-    // Re-read on every recomposition rather than remembered: the user leaves
-    // for Settings and comes back, and a cached value would still claim the
-    // app is restricted after they have just fixed it.
     var batteryExempt by remember { mutableStateOf(BatteryPolicy.isExempt(context)) }
     var keepAlive by remember { mutableStateOf(KeepAliveService.isRunning(context)) }
+    var exits by remember { mutableStateOf(ExitHistory.recent(context)) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    fun refresh() {
+        entries = SpikeLog.all(context)
+        batteryExempt = BatteryPolicy.isExempt(context)
+        keepAlive = KeepAliveService.isRunning(context)
+        exits = ExitHistory.recent(context)
+        crash = CrashLog.last(context)
+        now = System.currentTimeMillis()
+    }
+
+    // Re-read on every resume: the user leaves for Settings and comes back,
+    // and a cached value would still claim the app is restricted after they
+    // have just fixed it. Repeated for a few seconds rather than once, because
+    // a held alarm is delivered as the app thaws -- a beat *after* it opens --
+    // and a single read would show "not delivered" for one that just arrived.
+    // Stops after that: a loop running in the background would be the app
+    // doing work while frozen-or-not is the thing under test.
+    LaunchedEffect(resumes) {
+        repeat(5) {
+            refresh()
+            delay(1_000)
+        }
+    }
 
     fun arm(api: AlarmScheduler.Api, minutes: Int) {
         val due = System.currentTimeMillis() + minutes * 60_000L
@@ -122,6 +166,8 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Alarm spike", style = MaterialTheme.typography.headlineSmall)
+        Text(SPIKE_BUILD, style = MaterialTheme.typography.labelMedium)
+        Text(DeviceState.describeDevice(), style = MaterialTheme.typography.bodySmall)
 
         // There is no logcat on a sideloaded build with USB debugging off, so
         // the last crash is shown here or it is not shown at all.
@@ -142,10 +188,11 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
         }
         Text(
             "Arm an alarm, lock the screen, and DO NOT TOUCH THE PHONE until " +
-                "after the due time — waking it is what made the last two runs " +
-                "look late. Unplug for anything longer than five minutes. " +
-                "Doze does not engage while charging, so a plugged-in run passes " +
-                "regardless and proves nothing.",
+                "well after the due time. Each result now records whether the " +
+                "screen was on when the alarm arrived: PASS means it rang by " +
+                "itself in the dark, HELD means it waited for you to wake the " +
+                "phone. Unplug first -- Doze does not engage while charging, and " +
+                "a plugged-in run is marked as not counting.",
             style = MaterialTheme.typography.bodySmall,
         )
 
@@ -257,14 +304,15 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { entries = SpikeLog.all(context) }) { Text("Refresh") }
+            OutlinedButton(onClick = { refresh() }) { Text("Refresh") }
             OutlinedButton(onClick = { SpikeLog.clear(context); entries = emptyList() }) {
                 Text("Clear")
             }
         }
 
         Text(
-            "Results (${entries.count { it.firedAtMs != null }}/${entries.size} fired)",
+            "Results (${entries.count { it.firedAtMs != null }}/${entries.size} fired, " +
+                "${entries.count { it.verdict == SpikeLog.Verdict.RANG_IN_DARK }} passed)",
             style = MaterialTheme.typography.titleMedium,
         )
 
@@ -273,24 +321,94 @@ private fun SpikeScreen(modifier: Modifier = Modifier) {
         }
 
         entries.sortedByDescending { it.dueAtMs }.forEach { entry ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("#${entry.id}  ${entry.api}", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "due ${CLOCK.format(Date(entry.dueAtMs))}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    val drift = entry.driftSeconds
-                    Text(
-                        when {
-                            drift == null -> "waiting"
-                            else -> "fired ${CLOCK.format(Date(entry.firedAtMs!!))}  " +
-                                "(${drift}s late)" + if (entry.coldStart) "  cold start" else ""
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
+            EntryCard(entry, exits, now)
         }
     }
+}
+
+/**
+ * One alarm, read as a result rather than a timestamp: the verdict first, then
+ * the evidence for it, so a screenshot of this card is a complete report.
+ */
+@Composable
+private fun EntryCard(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now: Long) {
+    val verdictColor = when (entry.verdict) {
+        SpikeLog.Verdict.RANG_IN_DARK -> MaterialTheme.colorScheme.primary
+        SpikeLog.Verdict.HELD_UNTIL_SCREEN_ON -> MaterialTheme.colorScheme.error
+        SpikeLog.Verdict.WAITING ->
+            if (now - entry.dueAtMs > SpikeLog.ON_TIME_SECONDS * 1000) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val armedMinutes = (entry.dueAtMs - entry.armedAtMs + 30_000) / 60_000
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "#${entry.id}  ${entry.api}  ${armedMinutes}m",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                entry.headline(now),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = verdictColor,
+            )
+            if (entry.wasPluggedIn) {
+                Text(
+                    "DOES NOT COUNT - plugged in, so Doze could not engage",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Text(
+                "due ${CLOCK.format(Date(entry.dueAtMs))}" +
+                    (entry.firedAtMs?.let { "  -  arrived ${CLOCK.format(Date(it))}" } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            entry.armed?.let {
+                Text("armed: ${describeArmed(it)}", style = MaterialTheme.typography.bodySmall)
+            }
+            entry.atFire?.let {
+                Text(
+                    "arrived: ${describeArrival(it)}" +
+                        if (entry.coldStart) " - cold start (process was rebuilt)" else " - warm process",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Text(
+                "process deaths while waiting: " + describeDeaths(entry, exits, now),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+private fun yesNo(value: Boolean?, yes: String, no: String): String? = when (value) {
+    true -> yes
+    false -> no
+    null -> null
+}
+
+private fun describeArmed(s: SpikeLog.Snapshot): String = listOfNotNull(
+    yesNo(s.keepAlive, "keep-alive ON", "keep-alive off"),
+    yesNo(s.plugged, "PLUGGED IN", "unplugged"),
+    yesNo(s.batteryExempt, "battery unrestricted", "battery OPTIMISED"),
+).joinToString(" - ")
+
+private fun describeArrival(s: SpikeLog.Snapshot): String = listOfNotNull(
+    yesNo(s.screenOn, "screen ON", "screen off"),
+    yesNo(s.locked, "locked", "unlocked"),
+    yesNo(s.plugged, "PLUGGED IN", "unplugged"),
+    yesNo(s.keepAlive, "keep-alive running", "keep-alive NOT running"),
+).joinToString(" - ")
+
+private fun describeDeaths(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now: Long): String {
+    if (exits == null) return "unknown (needs Android 11+)"
+    val during = ExitHistory.between(exits, entry.armedAtMs, entry.firedAtMs ?: now)
+    if (during.isEmpty()) return "none"
+    return during.joinToString("; ") { "${CLOCK.format(Date(it.atMs))} ${it.reason}" }
 }

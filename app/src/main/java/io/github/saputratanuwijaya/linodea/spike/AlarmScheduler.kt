@@ -72,7 +72,10 @@ object AlarmScheduler {
                 manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, dueAtMs, pending)
         }
 
-        SpikeLog.armed(context, id, api.label, dueAtMs)
+        // Recorded with the alarm so a result carries its own conditions: a
+        // run armed while charging, or with keep-alive off, reads as such
+        // later without anyone having to remember.
+        SpikeLog.armed(context, id, api.label, dueAtMs, DeviceState.snapshot(context))
     }
 
     /**
