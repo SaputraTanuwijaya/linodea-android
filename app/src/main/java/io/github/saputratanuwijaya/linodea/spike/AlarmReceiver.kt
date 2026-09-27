@@ -38,7 +38,13 @@ class AlarmReceiver : BroadcastReceiver() {
         // rebuild us to get here, which is what an OEM kill looks like when it
         // does not simply swallow the alarm.
         val coldStart = !ProcessState.wasWarm
+        // An id the log does not know still gets a record: the overnight run
+        // rang a cleared alarm at 12:03 that nothing could see afterwards, and
+        // a phantom nobody can read is how the run was misread.
         val entry = SpikeLog.fired(context, id, coldStart, state)
+            ?: SpikeLog.unlogged(
+                context, id, api, intent.getLongExtra(EXTRA_DUE_AT, 0L), coldStart, state,
+            )
 
         notify(context, id, api, entry, coldStart)
 
@@ -87,6 +93,7 @@ class AlarmReceiver : BroadcastReceiver() {
         )
 
         val text = "$api - " + (entry?.headline(System.currentTimeMillis()) ?: "not in the log") +
+            (if (entry?.unlogged == true) " - NOT IN THE LOG (armed before a Clear)" else "") +
             if (coldStart) " - cold start" else ""
         val open = PendingIntent.getActivity(
             context,

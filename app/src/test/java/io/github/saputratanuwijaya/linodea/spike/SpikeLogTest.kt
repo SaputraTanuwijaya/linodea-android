@@ -147,6 +147,24 @@ class SpikeLogTest {
     }
 
     @Test
+    fun `an unlogged delivery still gets a verdict from its own due time`() {
+        // The 12:03 phantom: armed before a Clear, rang with no entry. Its due
+        // time travels in the alarm's intent, so it can still be judged.
+        val phantom = SpikeLog.Entry(
+            id = 3,
+            api = "setAlarmClock",
+            armedAtMs = 1_000_000,
+            dueAtMs = 1_000_000,
+            firedAtMs = 1_001_000,
+            coldStart = true,
+            atFire = state(screenOn = false),
+            unlogged = true,
+        )
+        assertEquals(Verdict.RANG_IN_DARK, phantom.verdict)
+        assertTrue(phantom.unlogged)
+    }
+
+    @Test
     fun `durations read as a person would say them`() {
         assertEquals("2s", SpikeLog.formatDuration(2))
         assertEquals("3m 07s", SpikeLog.formatDuration(187))

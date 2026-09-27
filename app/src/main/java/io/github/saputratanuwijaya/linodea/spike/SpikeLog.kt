@@ -20,6 +20,7 @@ import org.json.JSONObject
 object SpikeLog {
     private const val PREFS = "linodea.alarm.spike"
     private const val KEY = "entries"
+    private const val KEY_NEXT_ID = "nextId"
 
     /**
      * Within this many seconds of due counts as on time. `setAlarmClock` is
@@ -87,6 +88,12 @@ object SpikeLog {
         val armed: Snapshot? = null,
         /** The phone's state at the instant the alarm was delivered. */
         val atFire: Snapshot? = null,
+        /**
+         * Delivered for an id the log did not have: armed before a Clear, or
+         * delivered twice. Recorded rather than dropped -- an alarm that rang
+         * with nowhere to write it is how the overnight run grew a phantom.
+         */
+        val unlogged: Boolean = false,
     ) {
         /** How late the alarm was, in seconds. Negative would mean early. */
         val driftSeconds: Long?
@@ -211,6 +218,7 @@ object SpikeLog {
                     coldStart = o.optBoolean("coldStart", false),
                     armed = snapshotOf(o.optJSONObject("armed")),
                     atFire = snapshotOf(o.optJSONObject("atFire")),
+                    unlogged = o.optBoolean("unlogged", false),
                 )
             }
         }.getOrDefault(emptyList())
@@ -232,6 +240,7 @@ object SpikeLog {
                     put("coldStart", entry.coldStart)
                     entry.armed?.let { put("armed", it.toJson()) }
                     entry.atFire?.let { put("atFire", it.toJson()) }
+                    if (entry.unlogged) put("unlogged", true)
                 }
             )
         }
@@ -269,9 +278,51 @@ object SpikeLog {
         return delivered
     }
 
+    /**
+     * Record a delivery the log has no entry for. The due time comes from the
+     * alarm's own intent, so even a phantom gets a verdict and a drift.
+     */
+    fun unlogged(
+        context: Context,
+        id: Int,
+        api: String,
+        dueAtMs: Long,
+        coldStart: Boolean,
+        state: Snapshot,
+    ): Entry {
+        val entry = Entry(
+            id = id,
+            api = api,
+            armedAtMs = dueAtMs,
+            dueAtMs = dueAtMs,
+            firedAtMs = System.currentTimeMillis(),
+            coldStart = coldStart,
+            atFire = state,
+            unlogged = true,
+        )
+        write(context, all(context) + entry)
+        return entry
+    }
+
     /** Alarms that were armed and have not reported firing. */
     fun pending(context: Context): List<Entry> = all(context).filter { it.firedAtMs == null }
 
+    /**
+     * The next alarm id, never reused. Ids used to be recomputed from the log,
+     * so a Clear reset them to 1 and a new alarm could share a number with
+     * one still armed.
+     */
+    fun takeNextId(context: Context): Int {
+        val prefs = prefs(context)
+        val next = maxOf(prefs.getInt(KEY_NEXT_ID, 1), (all(context).maxOfOrNull { it.id } ?: 0) + 1)
+        prefs.edit().putInt(KEY_NEXT_ID, next + 1).commit()
+        return next
+    }
+
+    /** Highest id ever handed out, for cancelling everything that might still be armed. */
+    fun highestId(context: Context): Int = prefs(context).getInt(KEY_NEXT_ID, 1) - 1
+
+    /** Empties the log. Cancelling the alarms is the caller's job, and must come first. */
     fun clear(context: Context) {
         prefs(context).edit().remove(KEY).commit()
     }

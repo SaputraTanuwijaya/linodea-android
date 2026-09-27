@@ -108,7 +108,13 @@ class MainActivity : ComponentActivity() {
  * not the one before it -- a sideload that silently failed would otherwise
  * produce results from the old instrument.
  */
-private const val SPIKE_BUILD = "Instrument v4 - who started it, who killed it"
+private const val SPIKE_BUILD = "Instrument v5 - Clear cancels alarms"
+
+/**
+ * Builds before v5 reused ids from 1 after every Clear, so anything they left
+ * armed sits in this range. Sweeping it costs a few lookups.
+ */
+private const val CANCEL_SWEEP = 100
 
 private val CLOCK = SimpleDateFormat("EEE HH:mm:ss", Locale.getDefault())
 
@@ -116,7 +122,6 @@ private val CLOCK = SimpleDateFormat("EEE HH:mm:ss", Locale.getDefault())
 private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var entries by remember { mutableStateOf(SpikeLog.all(context)) }
-    var nextId by remember { mutableStateOf((entries.maxOfOrNull { it.id } ?: 0) + 1) }
 
     val askNotifications = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -173,8 +178,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
 
     fun arm(api: AlarmScheduler.Api, minutes: Int) {
         val due = System.currentTimeMillis() + minutes * 60_000L
-        AlarmScheduler.arm(context, nextId, api, due)
-        nextId += 1
+        AlarmScheduler.arm(context, SpikeLog.takeNextId(context), api, due)
         entries = SpikeLog.all(context)
     }
 
@@ -354,8 +358,14 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { refresh() }) { Text("Refresh") }
-            OutlinedButton(onClick = { SpikeLog.clear(context); entries = emptyList() }) {
-                Text("Clear")
+            OutlinedButton(onClick = {
+                // Alarms first, then the log: the other order leaves armed
+                // alarms with no entry to record them.
+                AlarmScheduler.cancelAll(context, maxOf(SpikeLog.highestId(context), CANCEL_SWEEP))
+                SpikeLog.clear(context)
+                entries = emptyList()
+            }) {
+                Text("Clear + cancel all")
             }
         }
 
@@ -402,7 +412,8 @@ private fun EntryCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                "#${entry.id}  ${entry.api}  ${armedMinutes}m",
+                "#${entry.id}  ${entry.api}  " +
+                    if (entry.unlogged) "NOT IN THE LOG (armed before a Clear)" else "${armedMinutes}m",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(

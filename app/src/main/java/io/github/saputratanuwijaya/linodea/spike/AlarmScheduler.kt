@@ -102,6 +102,31 @@ object AlarmScheduler {
         }
     }
 
+    /**
+     * Cancel every alarm this app may still have armed, ids 1 through
+     * `upToId`. Clear has to call this first: emptying the log while alarms
+     * stayed armed is what made the overnight run ring an alarm at 12:03 that
+     * no entry could record.
+     */
+    fun cancelAll(context: Context, upToId: Int) {
+        val manager = context.getSystemService(AlarmManager::class.java)
+        for (id in 1..upToId) {
+            // Equality ignores extras, so action + request code finds the
+            // original. NO_CREATE: look it up, never make a new one.
+            val intent = Intent(context, AlarmReceiver::class.java).apply {
+                action = "${AlarmReceiver.ACTION_FIRE}.$id"
+            }
+            val pending = PendingIntent.getBroadcast(
+                context,
+                id,
+                intent,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+            ) ?: continue
+            manager.cancel(pending)
+            pending.cancel()
+        }
+    }
+
     private fun firePendingIntent(
         context: Context,
         id: Int,
