@@ -32,19 +32,35 @@ object DeviceState {
             keepAlive = runCatching { KeepAliveService.isRunning(app) }.getOrNull(),
             batteryExempt = runCatching { BatteryPolicy.isExempt(app) }.getOrNull(),
             endWhenHidden = runCatching { EndWhenHidden.isEnabled(app) }.getOrNull(),
+            // The overnight failure was released the moment a low battery went
+            // on the charger, which makes the battery a suspect: OEM power
+            // managers commonly tighten below a threshold and relax on charge.
+            batteryPercent = runCatching { batteryPercent(app) }.getOrNull(),
+            powerSave = runCatching { app.getSystemService(PowerManager::class.java).isPowerSaveMode }
+                .getOrNull(),
         )
     }
+
+    // A null receiver reads the sticky broadcast without registering anything,
+    // which is also why it is allowed from inside a receiver.
+    private fun batteryStatus(context: Context): Intent? =
+        context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
     /**
      * Plugged, not charging: a full battery on a charger reports not charging,
      * and Doze stays off either way.
      */
     private fun isPlugged(context: Context): Boolean? {
-        // A null receiver reads the sticky broadcast without registering
-        // anything, which is also why it is allowed from inside a receiver.
-        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            ?: return null
+        val battery = batteryStatus(context) ?: return null
         return battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+    }
+
+    private fun batteryPercent(context: Context): Int? {
+        val battery = batteryStatus(context) ?: return null
+        val level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return null
+        return level * 100 / scale
     }
 
     /**

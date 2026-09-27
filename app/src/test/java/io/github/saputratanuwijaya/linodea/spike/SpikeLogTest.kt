@@ -114,12 +114,36 @@ class SpikeLogTest {
     }
 
     @Test
-    fun `charging at either end voids the run`() {
-        assertFalse(entry(1, 2, armed = state(), atFire = state()).wasPluggedIn)
-        assertTrue(entry(1, 2, armed = state(plugged = true), atFire = state()).wasPluggedIn)
-        assertTrue(entry(1, 2, armed = state(), atFire = state(plugged = true)).wasPluggedIn)
+    fun `charging voids a pass`() {
+        assertFalse(entry(1_000_000, 1_002_000, armed = state(), atFire = state()).voidedByCharging)
+        // Armed on the charger: nothing about the run is clean.
+        assertTrue(
+            entry(1_000_000, 1_002_000, armed = state(plugged = true), atFire = state())
+                .voidedByCharging
+        )
+        // Rang on the charger: Doze never had a chance to hold it.
+        assertTrue(
+            entry(1_000_000, 1_002_000, armed = state(), atFire = state(plugged = true))
+                .voidedByCharging
+        )
         // Unknown is not plugged: an old entry is not voided by missing data.
-        assertFalse(entry(1, 2).wasPluggedIn)
+        assertFalse(entry(1, 2).voidedByCharging)
+    }
+
+    @Test
+    fun `charging does not void a failure that happened unplugged`() {
+        // The overnight run exactly: armed unplugged, held 58 minutes, released
+        // a minute after a low battery went on the charger. It first read
+        // "DOES NOT COUNT", which hid the failure behind its own release.
+        val overnight = entry(
+            dueAtMs = 1_000_000,
+            firedAtMs = 1_000_000 + 3_509_000,
+            armed = state(),
+            atFire = state(screenOn = true, plugged = true),
+        )
+        assertEquals(Verdict.HELD_UNTIL_SCREEN_ON, overnight.verdict)
+        assertFalse(overnight.voidedByCharging)
+        assertTrue(overnight.releasedOnCharger)
     }
 
     @Test

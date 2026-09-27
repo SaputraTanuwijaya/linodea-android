@@ -39,6 +39,9 @@ object SpikeLog {
         val keepAlive: Boolean?,
         val batteryExempt: Boolean?,
         val endWhenHidden: Boolean? = null,
+        val batteryPercent: Int? = null,
+        /** Android's own battery saver. XOS may have its own that this cannot see. */
+        val powerSave: Boolean? = null,
     )
 
     /**
@@ -103,11 +106,20 @@ object SpikeLog {
             }
 
         /**
-         * Charging at either end voids the run: Doze does not engage while
-         * plugged in, so a pass proves nothing about the unplugged case.
+         * Charging voids a pass, not a failure. Doze does not engage on a
+         * charger, so an alarm that rang while plugged in proves nothing about
+         * the unplugged case. But one armed unplugged that was held anyway
+         * failed while unplugged; arriving after a charger went in only says
+         * what released it -- which is how the overnight run was first
+         * misread as void.
          */
-        val wasPluggedIn: Boolean
-            get() = armed?.plugged == true || atFire?.plugged == true
+        val voidedByCharging: Boolean
+            get() = armed?.plugged == true ||
+                (atFire?.plugged == true && verdict == Verdict.RANG_IN_DARK)
+
+        /** Failed unplugged, then arrived on the charger: charging may be the release. */
+        val releasedOnCharger: Boolean
+            get() = !voidedByCharging && atFire?.plugged == true
 
         /**
          * The one line a person reads, on the notification and on the screen.
@@ -163,6 +175,8 @@ object SpikeLog {
         putOpt("keepAlive", keepAlive)
         putOpt("batteryExempt", batteryExempt)
         putOpt("endWhenHidden", endWhenHidden)
+        putOpt("batteryPercent", batteryPercent)
+        putOpt("powerSave", powerSave)
     }
 
     private fun snapshotOf(o: JSONObject?): Snapshot? = o?.let {
@@ -173,6 +187,12 @@ object SpikeLog {
             keepAlive = it.bool("keepAlive"),
             batteryExempt = it.bool("batteryExempt"),
             endWhenHidden = it.bool("endWhenHidden"),
+            batteryPercent = if (it.has("batteryPercent") && !it.isNull("batteryPercent")) {
+                it.getInt("batteryPercent")
+            } else {
+                null
+            },
+            powerSave = it.bool("powerSave"),
         )
     }
 

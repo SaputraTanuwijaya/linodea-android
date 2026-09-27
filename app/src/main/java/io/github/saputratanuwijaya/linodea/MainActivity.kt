@@ -47,6 +47,7 @@ import io.github.saputratanuwijaya.linodea.spike.KeepAliveService
 import io.github.saputratanuwijaya.linodea.spike.CrashLog
 import io.github.saputratanuwijaya.linodea.spike.ProcessState
 import io.github.saputratanuwijaya.linodea.spike.SpikeLog
+import io.github.saputratanuwijaya.linodea.spike.StartHistory
 import io.github.saputratanuwijaya.linodea.ui.theme.LinodeaTheme
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -107,7 +108,7 @@ class MainActivity : ComponentActivity() {
  * not the one before it -- a sideload that silently failed would otherwise
  * produce results from the old instrument.
  */
-private const val SPIKE_BUILD = "Instrument v3 - end when hidden"
+private const val SPIKE_BUILD = "Instrument v4 - who started it, who killed it"
 
 private val CLOCK = SimpleDateFormat("EEE HH:mm:ss", Locale.getDefault())
 
@@ -142,6 +143,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
     var keepAlive by remember { mutableStateOf(KeepAliveService.isRunning(context)) }
     var endWhenHidden by remember { mutableStateOf(EndWhenHidden.isEnabled(context)) }
     var exits by remember { mutableStateOf(ExitHistory.recent(context)) }
+    var starts by remember { mutableStateOf(StartHistory.recent(context)) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     fun refresh() {
@@ -150,6 +152,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
         keepAlive = KeepAliveService.isRunning(context)
         endWhenHidden = EndWhenHidden.isEnabled(context)
         exits = ExitHistory.recent(context)
+        starts = StartHistory.recent(context)
         crash = CrashLog.last(context)
         now = System.currentTimeMillis()
     }
@@ -367,7 +370,7 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
         }
 
         entries.sortedByDescending { it.dueAtMs }.forEach { entry ->
-            EntryCard(entry, exits, now)
+            EntryCard(entry, exits, starts, now)
         }
     }
 }
@@ -377,7 +380,12 @@ private fun SpikeScreen(resumes: Int, modifier: Modifier = Modifier) {
  * the evidence for it, so a screenshot of this card is a complete report.
  */
 @Composable
-private fun EntryCard(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now: Long) {
+private fun EntryCard(
+    entry: SpikeLog.Entry,
+    exits: List<ExitHistory.Exit>?,
+    starts: List<StartHistory.Start>?,
+    now: Long,
+) {
     val verdictColor = when (entry.verdict) {
         SpikeLog.Verdict.RANG_IN_DARK -> MaterialTheme.colorScheme.primary
         SpikeLog.Verdict.HELD_UNTIL_SCREEN_ON -> MaterialTheme.colorScheme.error
@@ -403,9 +411,15 @@ private fun EntryCard(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now
                 fontWeight = FontWeight.Bold,
                 color = verdictColor,
             )
-            if (entry.wasPluggedIn) {
+            if (entry.voidedByCharging) {
                 Text(
                     "DOES NOT COUNT - plugged in, so Doze could not engage",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (entry.releasedOnCharger) {
+                Text(
+                    "Armed unplugged and arrived on the charger - charging may be what released it",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -426,7 +440,7 @@ private fun EntryCard(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now
                 )
             }
             Text(
-                "process deaths while waiting: " + describeDeaths(entry, exits, now),
+                "process while waiting:" + describeProcess(entry, exits, starts, now),
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -439,11 +453,17 @@ private fun yesNo(value: Boolean?, yes: String, no: String): String? = when (val
     null -> null
 }
 
+private fun describeBattery(s: SpikeLog.Snapshot): String? = listOfNotNull(
+    s.batteryPercent?.let { "battery $it%" },
+    if (s.powerSave == true) "POWER SAVING ON" else null,
+).joinToString(" ").ifEmpty { null }
+
 private fun describeArmed(s: SpikeLog.Snapshot): String = listOfNotNull(
     yesNo(s.endWhenHidden, "end-when-hidden ON", "end-when-hidden off"),
     yesNo(s.keepAlive, "keep-alive ON", "keep-alive off"),
     yesNo(s.plugged, "PLUGGED IN", "unplugged"),
     yesNo(s.batteryExempt, "battery unrestricted", "battery OPTIMISED"),
+    describeBattery(s),
 ).joinToString(" - ")
 
 private fun describeArrival(s: SpikeLog.Snapshot): String = listOfNotNull(
@@ -451,11 +471,42 @@ private fun describeArrival(s: SpikeLog.Snapshot): String = listOfNotNull(
     yesNo(s.locked, "locked", "unlocked"),
     yesNo(s.plugged, "PLUGGED IN", "unplugged"),
     yesNo(s.keepAlive, "keep-alive running", "keep-alive NOT running"),
+    describeBattery(s),
 ).joinToString(" - ")
 
-private fun describeDeaths(entry: SpikeLog.Entry, exits: List<ExitHistory.Exit>?, now: Long): String {
-    if (exits == null) return "unknown (needs Android 11+)"
-    val during = ExitHistory.between(exits, entry.armedAtMs, entry.firedAtMs ?: now)
-    if (during.isEmpty()) return "none"
-    return during.joinToString("; ") { "${CLOCK.format(Date(it.atMs))} ${it.reason}" }
+/**
+ * Every start and death of the process between arming and delivery, one per
+ * line in time order, so "who brought it back and who killed it" reads as a
+ * sequence instead of two lists to cross-reference.
+ */
+private fun describeProcess(
+    entry: SpikeLog.Entry,
+    exits: List<ExitHistory.Exit>?,
+    starts: List<StartHistory.Start>?,
+    now: Long,
+): String {
+    val to = entry.firedAtMs ?: now
+    val lines = mutableListOf<Pair<Long, String>>()
+    exits?.let { all ->
+        ExitHistory.between(all, entry.armedAtMs, to).forEach { exit ->
+            val detail = listOfNotNull(
+                exit.standing?.let { "was $it" },
+                exit.description?.takeIf { it.isNotBlank() }?.let { "\"$it\"" },
+            ).joinToString(", ")
+            lines += exit.atMs to "died: ${exit.reason}" + if (detail.isEmpty()) "" else " ($detail)"
+        }
+    }
+    starts?.let { all ->
+        StartHistory.between(all, entry.armedAtMs, to).forEach { start ->
+            lines += start.atMs to "started by ${start.reason} (${start.type})"
+        }
+    }
+    val notes = listOfNotNull(
+        if (exits == null) "deaths unknown (needs Android 11+)" else null,
+        if (starts == null) "starts unknown (needs Android 15+)" else null,
+    )
+    if (lines.isEmpty()) return " none" + notes.joinToString("") { "\n  $it" }
+    return lines.sortedBy { it.first }
+        .joinToString("") { (at, text) -> "\n  ${CLOCK.format(Date(at))} $text" } +
+        notes.joinToString("") { "\n  $it" }
 }
