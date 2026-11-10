@@ -50,10 +50,57 @@ object AlarmScheduler {
         }
     }
 
-    fun arm(context: Context, id: Int, api: Api, dueAtMs: Long) {
-        val manager = context.getSystemService(AlarmManager::class.java)
-        val pending = firePendingIntent(context, id, api, dueAtMs)
+    /**
+     * Arms an alarm and logs it. `label` is what the log calls it, which
+     * differs from the API for a heartbeat: the same call, a different job.
+     *
+     * Returns false when the system refused, and logs nothing in that case --
+     * an entry for an alarm that was never set would read "NOT DELIVERED" the
+     * next morning and blame the phone for something the app failed to do.
+     */
+    fun arm(
+        context: Context,
+        id: Int,
+        api: Api,
+        dueAtMs: Long,
+        label: String = api.label,
+        trial: Int? = null,
+    ): Boolean {
+        val set = runCatching { set(context, id, api, label, dueAtMs) }
+        set.exceptionOrNull()?.let {
+            Journal.note(context, "COULD NOT ARM $label #$id: ${it.javaClass.simpleName} ${it.message}")
+            return false
+        }
+        // Recorded with the alarm so a result carries its own conditions: a
+        // run armed while charging, or with keep-alive off, reads as such
+        // later without anyone having to remember.
+        SpikeLog.armed(context, id, label, dueAtMs, DeviceState.snapshot(context), trial)
+        return true
+    }
 
+    /**
+     * Re-arm without logging a new entry — for `BOOT_COMPLETED`, where the
+     * alarms already exist in the log but Android has forgotten them.
+     */
+    fun rearmSilently(context: Context, entry: SpikeLog.Entry) {
+        val api = apiFor(entry.api) ?: return
+        runCatching { set(context, entry.id, api, entry.api, entry.dueAtMs) }
+    }
+
+    /**
+     * Which alarm API carries an entry, or null when no alarm of ours does:
+     * the calendar path is fired by the system calendar, which keeps its own
+     * schedule across a reboot.
+     */
+    fun apiFor(label: String): Api? = when (label) {
+        SpikeLog.API_CALENDAR -> null
+        SpikeLog.API_HEARTBEAT -> Api.EXACT_WHILE_IDLE
+        else -> Api.entries.firstOrNull { it.label == label } ?: Api.ALARM_CLOCK
+    }
+
+    private fun set(context: Context, id: Int, api: Api, label: String, dueAtMs: Long) {
+        val manager = context.getSystemService(AlarmManager::class.java)
+        val pending = firePendingIntent(context, id, label, dueAtMs)
         when (api) {
             Api.ALARM_CLOCK -> {
                 // The second PendingIntent is what the user taps on the status
@@ -70,35 +117,6 @@ object AlarmScheduler {
 
             Api.EXACT_WHILE_IDLE ->
                 manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, dueAtMs, pending)
-        }
-
-        // Recorded with the alarm so a result carries its own conditions: a
-        // run armed while charging, or with keep-alive off, reads as such
-        // later without anyone having to remember.
-        SpikeLog.armed(context, id, api.label, dueAtMs, DeviceState.snapshot(context))
-    }
-
-    /**
-     * Re-arm without logging a new entry — for `BOOT_COMPLETED`, where the
-     * alarms already exist in the log but Android has forgotten them.
-     */
-    fun rearmSilently(context: Context, entry: SpikeLog.Entry) {
-        val manager = context.getSystemService(AlarmManager::class.java)
-        val api = Api.entries.firstOrNull { it.label == entry.api } ?: Api.ALARM_CLOCK
-        val pending = firePendingIntent(context, entry.id, api, entry.dueAtMs)
-        when (api) {
-            Api.ALARM_CLOCK -> {
-                val show = PendingIntent.getActivity(
-                    context,
-                    entry.id,
-                    Intent(context, io.github.saputratanuwijaya.linodea.MainActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                manager.setAlarmClock(AlarmManager.AlarmClockInfo(entry.dueAtMs, show), pending)
-            }
-
-            Api.EXACT_WHILE_IDLE ->
-                manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, entry.dueAtMs, pending)
         }
     }
 
@@ -130,7 +148,7 @@ object AlarmScheduler {
     private fun firePendingIntent(
         context: Context,
         id: Int,
-        api: Api,
+        label: String,
         dueAtMs: Long,
     ): PendingIntent {
         val intent = Intent(context, AlarmReceiver::class.java).apply {
@@ -139,7 +157,7 @@ object AlarmScheduler {
             // the test would quietly measure one alarm instead of two.
             action = "${AlarmReceiver.ACTION_FIRE}.$id"
             putExtra(AlarmReceiver.EXTRA_ID, id)
-            putExtra(AlarmReceiver.EXTRA_API, api.label)
+            putExtra(AlarmReceiver.EXTRA_API, label)
             putExtra(AlarmReceiver.EXTRA_DUE_AT, dueAtMs)
         }
         return PendingIntent.getBroadcast(

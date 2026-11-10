@@ -17,13 +17,6 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
-      Lets the alarm appear over the lock screen instead of queueing behind it.
-      On 14+ this is auto-granted only to alarm- and call-class apps; anywhere
-      else it degrades to an ordinary heads-up rather than failing.
-    -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-
-    <!--
       Lets the app ask, in one tap, to stop being battery-optimised. Observed
       necessary on XOS, where the app is frozen with the screen off and alarms
       arrive only when it thaws.
@@ -39,6 +32,33 @@
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+      The calendar path: write a reminder into a calendar that exists only on
+      this phone, and read back what the calendar did with it. Asked for at
+      runtime; refusing it leaves that one path untested and the rest working.
+    -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
+    <!-- The control: asks the phone's own Clock app to ring at the same minute. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!--
+      Android 11+ hides other apps unless asked about. These two questions are
+      "which apps are told about calendar reminders" (shown on the setup card,
+      because if none are, no calendar app will show its own notification) and
+      "is there a Clock app to set the control alarm".
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.EVENT_REMINDER" />
+            <data android:scheme="content" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+    </queries>
 
     <application
         android:name=".spike.SpikeApplication"
@@ -62,11 +82,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-          Not exported: only AlarmManager delivers to these, and an exported
-          receiver would let any app on the device forge a firing and corrupt
-          the results.
-        -->
         <service
             android:name=".spike.KeepAliveService"
             android:exported="false"
@@ -76,9 +91,28 @@
                 android:value="Keeps the process resident so exact alarms are delivered on OEM builds that freeze cached apps" />
         </service>
 
+        <!--
+          Not exported: only AlarmManager delivers to this, and an exported
+          receiver would let any app on the device forge a firing and corrupt
+          the results.
+        -->
         <receiver
             android:name=".spike.AlarmReceiver"
             android:exported="false" />
+
+        <!--
+          Exported, and has to be: the sender is Android's calendar storage,
+          another app. The receiver trusts the broadcast for its timing only
+          and checks it against its own record (see the class).
+        -->
+        <receiver
+            android:name=".spike.CalendarReminderReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.EVENT_REMINDER" />
+                <data android:scheme="content" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".spike.BootReceiver"

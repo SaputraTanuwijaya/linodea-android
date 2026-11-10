@@ -1,17 +1,8 @@
 package io.github.saputratanuwijaya.linodea.spike
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.RingtoneManager
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import io.github.saputratanuwijaya.linodea.MainActivity
-import io.github.saputratanuwijaya.linodea.R
 
 /**
  * What happens when an alarm actually goes off.
@@ -38,6 +29,8 @@ class AlarmReceiver : BroadcastReceiver() {
         // rebuild us to get here, which is what an OEM kill looks like when it
         // does not simply swallow the alarm.
         val coldStart = !ProcessState.wasWarm
+        Journal.note(context, "receiver: $api #$id")
+
         // An id the log does not know still gets a record: the overnight run
         // rang a cleared alarm at 12:03 that nothing could see afterwards, and
         // a phantom nobody can read is how the run was misread.
@@ -46,90 +39,23 @@ class AlarmReceiver : BroadcastReceiver() {
                 context, id, api, intent.getLongExtra(EXTRA_DUE_AT, 0L), coldStart, state,
             )
 
-        notify(context, id, api, entry, coldStart)
+        // A heartbeat announces nothing. Arriving is its whole result.
+        if (!entry.isHeartbeat) {
+            Notify.arrived(context, entry, coldStart, quiet = entry.noticedAtMs != null)
+            entry.trial?.let { Notify.cancelUpcoming(context, it) }
+        }
+
+        // This process is running, so anything else that is overdue gets
+        // announced now rather than whenever the phone releases it.
+        Delivery.catchUp(
+            context,
+            by = if (entry.isHeartbeat) "a heartbeat" else "another alarm arriving",
+            state = state,
+        )
 
         // Last, after the record and the notification are both out of this
         // process: the sound is played by the system, so it outlives us.
         EndWhenHidden.endAfterBroadcast(this, context)
-    }
-
-    private fun notify(
-        context: Context,
-        id: Int,
-        api: String,
-        entry: SpikeLog.Entry?,
-        coldStart: Boolean,
-    ) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL,
-                "Alarm spike",
-                // HIGH so it can make a sound and appear over other apps --
-                // the point is to be noticed from across a room at 3am.
-                NotificationManager.IMPORTANCE_HIGH,
-            ).apply {
-                // The difference between a notification and an alarm.
-                //
-                // A default notification sound plays on the notification
-                // stream, which silent mode, Do Not Disturb and the ringer
-                // slider all silence -- observed on a real phone: the alarm
-                // fired, the record was written, and nothing was audible with
-                // the screen off. USAGE_ALARM routes to the alarm stream
-                // instead, which is what a clock app uses and what survives a
-                // phone left on silent overnight.
-                setSound(
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build(),
-                )
-                enableVibration(true)
-                // Only applies if the user has granted policy access; ignored
-                // silently otherwise, which is the right failure.
-                setBypassDnd(true)
-            }
-        )
-
-        val text = "$api - " + (entry?.headline(System.currentTimeMillis()) ?: "not in the log") +
-            (if (entry?.unlogged == true) " - NOT IN THE LOG (armed before a Clear)" else "") +
-            if (coldStart) " - cold start" else ""
-        val open = PendingIntent.getActivity(
-            context,
-            id,
-            Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val notification = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Alarm #$id fired")
-            // The verdict is on the notification itself, so a glance at the
-            // lock screen answers the question without opening anything: "it
-            // fired", "it fired on time" and "it was held until you looked"
-            // are three different results.
-            .setContentText(text)
-            // The headline is longer than one collapsed line; expanded, it
-            // reads whole instead of ending in an ellipsis before the verdict.
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
-            .setContentIntent(open)
-            // Shows over the lock screen rather than waiting behind it, the
-            // way an alarm or an incoming call does. On 14+ this is only
-            // honoured for alarm- and call-class apps; elsewhere it quietly
-            // degrades to an ordinary heads-up, which is still correct.
-            .setFullScreenIntent(open, true)
-            .build()
-
-        // areNotificationsEnabled guards the Android 13+ case where the runtime
-        // permission was refused: without it this throws and the recorded
-        // result would be lost to an exception after the fact.
-        if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
-            NotificationManagerCompat.from(context).notify(id, notification)
-        }
     }
 
     companion object {
@@ -137,9 +63,5 @@ class AlarmReceiver : BroadcastReceiver() {
         const val EXTRA_ID = "id"
         const val EXTRA_API = "api"
         const val EXTRA_DUE_AT = "dueAt"
-        // Bumped from "alarm-spike": a channel's sound and importance are fixed at
-        // creation and later edits are ignored, so a phone that already has the
-        // old channel would keep the notification-stream sound forever.
-        private const val CHANNEL = "alarm-spike-v2"
     }
 }

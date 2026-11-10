@@ -165,6 +165,64 @@ class SpikeLogTest {
     }
 
     @Test
+    fun `a calendar reminder for someone else's event is not ours arriving`() {
+        // The broadcast goes out for every calendar on the phone. A meeting
+        // at 09:00 must not be recorded as the 06:30 test being delivered.
+        val ours = entry(dueAtMs = 1_000_000, firedAtMs = null).copy(api = SpikeLog.API_CALENDAR)
+        assertTrue(SpikeLog.calendarMatches(ours, alarmAtMs = 1_000_000, nowMs = 1_000_500))
+        assertFalse(SpikeLog.calendarMatches(ours, alarmAtMs = 9_000_000, nowMs = 9_000_500))
+        // No time on the broadcast: fall back to "is ours due yet".
+        assertTrue(SpikeLog.calendarMatches(ours, alarmAtMs = null, nowMs = 1_000_500))
+        assertFalse(SpikeLog.calendarMatches(ours, alarmAtMs = null, nowMs = 999_000))
+        // An alarm of ours is never delivered by a calendar broadcast, and a
+        // calendar entry is never delivered twice.
+        assertFalse(SpikeLog.calendarMatches(entry(1_000_000, null), 1_000_000, 1_000_500))
+        assertFalse(SpikeLog.calendarMatches(ours.copy(firedAtMs = 1_000_100), 1_000_000, 1_000_500))
+    }
+
+    @Test
+    fun `only something overdue and unannounced is caught up, and never a heartbeat`() {
+        val due = 1_000_000L
+        val late = due + SpikeLog.OVERDUE_AFTER_MS + 1
+        assertTrue(SpikeLog.needsNoticing(entry(due, null), late))
+        // Mid-delivery: the alarm is a second old. Announcing it now would
+        // race the alarm itself and ring twice.
+        assertFalse(SpikeLog.needsNoticing(entry(due, null), due + 1_000))
+        // Already delivered, or already announced once.
+        assertFalse(SpikeLog.needsNoticing(entry(due, due + 500), late))
+        assertFalse(SpikeLog.needsNoticing(entry(due, null).copy(noticedAtMs = late), late + 5_000))
+        // A missing heartbeat is a result, not a reminder someone is owed.
+        assertFalse(SpikeLog.needsNoticing(entry(due, null).copy(api = SpikeLog.API_HEARTBEAT), late))
+    }
+
+    @Test
+    fun `an exit waits only for a delivery that is due this very moment`() {
+        // The emulator lost a delivery because the process ended as it was
+        // being sent. An exit outside a receiver now waits if something is
+        // due within a few seconds either side -- and only then, or a held
+        // alarm hours overdue would keep the process alive for ever, which is
+        // the frozen-process failure all over again.
+        val due = 1_000_000L
+        val pending = entry(due, null)
+        assertTrue(SpikeLog.isDueAround(pending, due - 3_000, withinMs = 5_000))
+        assertTrue(SpikeLog.isDueAround(pending, due + 4_000, withinMs = 5_000))
+        assertFalse(SpikeLog.isDueAround(pending, due - 60_000, withinMs = 5_000))
+        assertFalse(SpikeLog.isDueAround(pending, due + 6 * 3_600_000L, withinMs = 5_000))
+        // Already arrived: nothing to wait for.
+        assertFalse(SpikeLog.isDueAround(entry(due, due + 500), due + 1_000, withinMs = 5_000))
+    }
+
+    @Test
+    fun `a catch-up says how late it was and what was running`() {
+        val e = entry(1_000_000, null).copy(noticedAtMs = 1_000_000 + 344 * 60_000L, noticedBy = "the app being opened")
+        assertEquals("the app announced it itself 5h 44m after due (the app being opened)", e.noticedLine())
+        assertNull(entry(1_000_000, null).noticedLine())
+        // Announced by the app, still not delivered by the phone: the headline
+        // must keep saying so.
+        assertTrue(e.headline(nowMs = 1_000_000 + 400 * 60_000L).startsWith("NOT DELIVERED"))
+    }
+
+    @Test
     fun `durations read as a person would say them`() {
         assertEquals("2s", SpikeLog.formatDuration(2))
         assertEquals("3m 07s", SpikeLog.formatDuration(187))

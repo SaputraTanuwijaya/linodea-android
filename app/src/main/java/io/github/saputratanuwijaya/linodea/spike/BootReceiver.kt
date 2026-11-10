@@ -14,9 +14,9 @@ import android.content.Intent
  * of alarm reliability that cannot survive a restart has not tested the thing
  * people actually do to their phones.
  *
- * Alarms whose moment passed while the phone was off are left alone. Firing
- * them at boot would be a notification for something already missed, and would
- * pollute the drift numbers with values measured against a powered-off device.
+ * Alarms whose moment passed while the phone was off are not re-armed -- that
+ * would record a firing measured against a powered-off device. They are
+ * announced as overdue instead, which is what they are.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -25,11 +25,17 @@ class BootReceiver : BroadcastReceiver() {
         ) {
             return
         }
+        // Android 15 also sends this to an app the first time it is opened
+        // after being force-stopped, because a force-stop cancels its alarms
+        // just as a restart does. Either way the work is the same.
+        Journal.note(context, "receiver: restart (the phone, or this app after a force-stop)")
 
         val now = System.currentTimeMillis()
         SpikeLog.pending(context)
             .filter { it.dueAtMs > now }
             .forEach { AlarmScheduler.rearmSilently(context, it) }
+
+        Delivery.catchUp(context, by = "a restart of the phone or the app")
 
         // Boot starts the process; left running, it would be frozen before
         // the first of the alarms it just re-armed.

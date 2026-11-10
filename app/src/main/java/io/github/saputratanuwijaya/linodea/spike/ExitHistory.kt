@@ -60,7 +60,10 @@ object ExitHistory {
         importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "foreground service"
         importance <= RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
         importance <= RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> "perceptible"
-        importance <= RunningAppProcessInfo.IMPORTANCE_SERVICE -> "running a service"
+        // The system files a process that is handling a broadcast under the
+        // same heading as one running a service. Every exit of ours after an
+        // alarm lands here, so the label names both.
+        importance <= RunningAppProcessInfo.IMPORTANCE_SERVICE -> "handling a broadcast or service"
         // TOP_SLEEPING: the top app, with the screen off.
         importance <= 325 -> "on top, screen off"
         importance <= RunningAppProcessInfo.IMPORTANCE_CACHED -> "background"
